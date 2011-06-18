@@ -31,7 +31,7 @@
 			type="string"
 			required="false"
 			default=""
-			hint="I am the optional key needed to sign messages being posted to the RESTful API - this key should never be shared."
+			hint="I am the optional key needed to sign messages being posted to the RESTful API - this key should never be shared. NOTE: This is only used for ENTERPRISE customers; it's use or non-use will have zero impact on regular PubNub accounts."
 			/>
 			
 		<cfargument

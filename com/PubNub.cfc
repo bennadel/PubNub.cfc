@@ -490,18 +490,3 @@
 	</cffunction>
 
 </cfcomponent>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -10,6 +10,17 @@
 <!--- ----------------------------------------------------- --->
 <!--- ----------------------------------------------------- --->
 
+	
+<!--- 
+	Get the current time token of the channel. This will be used 
+	to for the subscribe method call farther down. 
+--->
+<cfset timeToken = pubnub.time() />
+	
+	
+<!--- ----------------------------------------------------- --->
+<!--- ----------------------------------------------------- --->
+
 
 <!--- Create a message to publish. --->
 <cfset message = {} />
@@ -50,3 +61,30 @@
 	var="#response#"
 	label="History Response"
 	/>
+	
+
+<!--- ----------------------------------------------------- --->
+<!--- ----------------------------------------------------- --->
+
+
+<!--- 
+	Subscribe the given channel using the retreived time token 
+	from above. This should return the broadcast message from 
+	above. 
+--->
+<cfset response = pubnub.subscribe(
+	channel = "coldfusion:hello_world",
+	timeToken = timeToken
+	) />
+	
+<h2>
+	Subscribe Response
+</h2>
+	
+<cfdump 
+	var="#response#"
+	label="Subscribe Response"
+	/>
+	
+	
+	

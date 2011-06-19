@@ -77,6 +77,12 @@
 		<!--- Define the user-agent to be used in the HTTP requests. --->
 		<cfset variables.userAgent = "ColdFusion/PubNub-Bot" />
 		
+		<!--- 
+			This will keep track of the currently subscribed 
+			asynchronous thread. 
+		--->
+		<cfset variables.asyncThreadName = "" />
+		
 		<!--- Return this object reference. --->
 		<cfreturn this />
 	</cffunction>
@@ -428,12 +434,182 @@
 		access="public"
 		returntype="struct"
 		output="false"
-		hint="I BLOCK the request until a response comes back from PubNub. The response may either be a timeout of the connection, or it may contain an array of messages.">
+		hint="I get the latest messages from the given channel. I am very much like the history() method; however, I used a timeToken to determine where in the historical timeline of messages to gather broadcasts. If the timeToken is zero, I am not likely to return any messages.">
 		
-		<cfthrow
-			type="MethodNotImplemented"
-			message="This method is not yet implemented in this component."
+		<!--- Define arguments. --->
+		<cfargument
+			name="channel"
+			type="string"
+			required="true"
+			hint="I am the channel to which we are subscribing."
 			/>
+		
+		<cfargument
+			name="timeToken"
+			type="string"
+			required="false"
+			default="0"
+			hint="I am the time token used to denote the last subscribed time. I'm not sure what this is used for; I assume it works like some sort of historical marker to know where the last known message was located."
+			/>
+		
+		<!--- Define the local scope. --->
+		<cfset var local = {} />
+		
+		<!--- Build the resource for the subscription. --->
+		<cfset local.resource = this.buildResource(
+			"subscribe",
+			variables.subscribeKey,
+			arguments.channel,
+			"0",
+			arguments.timeToken
+			) />
+	
+		<!--- Subscribe to the channel. --->
+		<cfhttp
+			result="local.response"
+			method="get"
+			url="#local.resource#"
+			useragent="#variables.userAgent#"
+			/>
+			
+		<!--- Check to see if the request came back OK. --->
+		<cfif !reFind( "2\d+", local.response.statusCode )>
+			
+			<!--- Throw an exception. --->
+			<cfthrow
+				type="HTTPFailure"
+				message="The HTTP request made to the API was not succesful."
+				detail="The HTTP request to the API returned with the status code #local.response.statusCode#."
+				/>
+		
+		</cfif>
+	
+		<!--- 
+			Deserialize the response. It should be an array with two items; 
+			the first is the array of messages and the second is the new 
+			timetoken:
+			
+			[ 1 ] = [ .. messages .. ]
+			[ 2 ] = time token 
+		--->
+		<cfset local.apiResponse = deserializeJSON(
+			toString( local.response.fileContent )
+			) />
+			
+		<!--- Create a normalized response object. --->
+		<cfset local.normalizedResponse = {
+			messages = local.apiResponse[ 1 ],
+			timeToken = local.apiResponse[ 2 ]
+			} />
+			
+		<!--- Return the normalized response. --->
+		<cfreturn local.normalizedResponse />
+	</cffunction>
+	
+	
+	<cffunction
+		name="subscribeAsync"
+		access="public"
+		returntype="struct"
+		output="false"
+		hint="I subscribe to the given channel using an ASYNCHRONOUS THREAD. Only one channel can be subscribed at a time.">
+		
+		<!--- Define arguments. --->
+		<cfargument
+			name="channel"
+			type="string"
+			required="true"
+			hint="I am the channel to which we are subscribing."
+			/>
+			
+		<cfargument
+			name="callback"
+			type="any"
+			required="true"
+			hint="I am the user defined function (UDF) that will be invoked for each message broadcast in the subscribed channel."
+			/>
+			
+		<cfargument
+			name="timeout"
+			type="numeric"
+			required="false"
+			default="0"
+			hint="I am the number of seconds that this async subscribe functionality can run before it is automatically unsubsribes. This is here for safey when testing."
+			/>
+		
+		<!--- Define the local scope. --->
+		<cfset var local = {} />
+		
+		<!--- Create a new thread name for this channel subscribtion. --->
+		<cfset variables.asyncThreadName = ("subscribe-" & hash( arguments.channel & getTickCount() )) />
+		
+		<!--- Start the thread. --->
+		<cfthread
+			action="run"
+			name="#variables.asyncThreadName#"
+			threadname="#variables.asyncThreadName#"
+			timestarted="#now()#"
+			subscribetimeout="#arguments.timeout#"	
+			channel="#arguments.channel#"
+			callback="#arguments.callback#">
+			
+			<!--- Store the callback locally. --->
+			<cfset thread.callback = attributes.callback />
+			
+			<!--- Default the timetoken. --->
+			<cfset thread.timeToken = "0" />
+				
+			<!--- Keep hitting the PubNub API until the thread is unsubscribed. --->
+			<cfloop condition="true">
+			
+				<!--- 
+					Check to see if the thread name matches the currently 
+					subscribed channel.
+					
+					If a timeout is specified, this will also cause the loop to break
+					if the timeout has elapsed.
+				--->
+				<cfif (
+					(attributes.threadName neq variables.asyncThreadName) ||
+					(
+						attributes.subscribeTimeout && 
+						(dateAdd( "s", attributes.subscribeTimeout, attributes.timeStarted ) lte now())
+					))>
+					
+					<!--- This thread has been unsubscribed - kill it. --->
+					<cfbreak />
+				
+				</cfif>
+				
+				<!--- Get the current messages. --->
+				<cfset thread.messageResponse = this.subscribe(
+					attributes.channel,
+					thread.timeToken
+					) />
+				
+				<cfset thread[ getTickCount() ] = thread.messageResponse />
+				
+				<!--- Store the new time token. --->
+				<cfset thread.timeToken = thread.messageResponse.timeToken />
+				
+				<!--- Loop over the messages and invoke the callback on each. --->
+				<cfloop
+					index="thread.message"
+					array="#thread.messageResponse.messages#">
+					
+					<cfset thread.callback( thread.message ) />
+					
+				</cfloop>
+				
+				<!--- Sleep the thread for a bit. --->
+				<cfset sleep( 2 * 1000 ) />
+				
+			</cfloop>
+			
+		</cfthread>
+		
+		<!--- Return this object reference for method chaining. --->
+		<cfreturn this />
 	</cffunction>
 	
 	
@@ -442,7 +618,16 @@
 		access="public"
 		returntype="any"
 		output="false"
-		hint="I return a standardized time (in milliseconds) as provided by PubNub. Due to the integer size limitations of ColdFusion, this is returned as a BigInt.">
+		hint="I return a standardized time (in milliseconds) as provided by PubNub. Due to the integer size limitations of ColdFusion, there is an option to return this value as a BigInt.">
+		
+		<!--- Define arguments. --->
+		<cfargument
+			name="returnAsBigInt"
+			type="boolean"
+			required="false"
+			default="false"
+			hint="I determine if the given time is returned as a BigInt Java object rather than as a string."
+			/>
 		
 		<!--- Define the local scope. --->
 		<cfset var local = {} />
@@ -474,19 +659,52 @@
 		</cfif>
 		
 		<!--- 
-			Since ColdFusion cannot handle enormous integers, we are 
-			going to return this value as a bigInt, which can be 
-			converted to number externally. 
+			Since ColdFusion can't handle enormous integers, we are 
+			going to parse the response as an integer string. The result
+			can subsequently be returned as a BigInt if desired.
 		--->
-		<cfset local.milliseconds = createObject( "java", "java.math.BigInteger" ).init(
-			javaCast( 
-				"string", 
-				reReplace( local.response.fileContent, "[^\d]+", "", "all" ) 
-				)
-			) />
+		<cfset local.timeAsString = reReplace( 
+			local.response.fileContent, 
+			"[^\d]+", 
+			"", 
+			"all"
+			) /> 
 		
-		<!--- Return the big int value. --->
-		<cfreturn local.milliseconds />
+		<!--- Check to see if a BigInt return is desired. --->
+		<cfif arguments.returnAsBigInt>
+		
+			<!--- Return a big integer. --->
+			<cfreturn createObject( "java", "java.math.BigInteger" ).init(
+				javaCast( "string", local.timeAsString )
+				) />
+		
+		<cfelse>
+		
+			<!--- Just return the value as a string. --->
+			<cfreturn local.timeAsString />
+		
+		</cfif>
+	</cffunction>
+	
+	
+	<cffunction
+		name="unsubscribe"
+		access="public"
+		returntype="any"
+		output="false"
+		hint="I unsubscribe from the current channel. Since only one channel can be subscribed at any one time, no channel needs to be specified. This applies mostly to the ASYNC subscribe method.">
+		
+		<!--- Define the local scope. --->
+		<cfset var local = {} />
+		
+		<!--- 
+			Clear the thread name. This is the best we can do since we 
+			can't end the thread manually.
+		--->
+		<cfset variables.asyncThreadName = "" />
+		
+		<!--- Return this object reference for method chaining. --->
+		<cfreturn this />
 	</cffunction>
 
 </cfcomponent>

@@ -14,7 +14,7 @@
 		/>
 		
 	<h1>
-		404 Not Found
+		401 Not Authorized
 	</h1>
 		
 	<!--- Halt processing of this template. --->
